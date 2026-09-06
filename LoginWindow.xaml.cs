@@ -11,7 +11,15 @@ namespace 云端管理
 {
     public partial class LoginWindow : Window
     {
-        private string _dataFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "profiles.dat");
+        private string _dataFile;
+
+        // 数据存储目录：用户文档\SshPro\（与 v1.2.0 定位一致，避免程序目录权限/重装丢失问题）
+        public static string GetDataDir()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "SshPro");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            return dir;
+        }
 
         public LoginWindow()
         {
@@ -20,6 +28,16 @@ namespace 云端管理
             ModeLocal.IsChecked = true; // 初始化完成后默认选中本地模式
             LoadSavedConfig();
             UpdateModeUI();
+            UpdateDataFile();
+        }
+
+        // 按当前选择的模式隔离数据文件：本地 / WebDAV / 官方 互不干扰
+        private void UpdateDataFile()
+        {
+            string fileName = "profiles_local.dat";
+            if (ModeOfficial.IsChecked == true) fileName = "profiles_official.dat";
+            else if (ModeWebDAV.IsChecked == true) fileName = "profiles_webdav.dat";
+            _dataFile = Path.Combine(GetDataDir(), fileName);
         }
 
         private void LoadSavedConfig()
@@ -53,6 +71,7 @@ namespace 云端管理
         private void Mode_Changed(object sender, RoutedEventArgs e)
         {
             UpdateModeUI();
+            UpdateDataFile();
         }
 
         private void UpdateModeUI()
@@ -93,6 +112,13 @@ namespace 云端管理
         {
             var config = CloudSyncManager.GetConfig();
             bool localFileExists = File.Exists(_dataFile);
+
+            // 首次启动（无任何模式的数据文件）：强制显示免责条款，拒绝则退出程序
+            if (!localFileExists && new DisclaimerWindow { Owner = this }.ShowDialog() != true)
+            {
+                Application.Current.Shutdown();
+                return;
+            }
 
             // WebDAV 模式：本地数据缺失但云同步配置存在 → 询问拉取
             if (config != null && config.Mode == SyncMode.WebDAV && config.IsEnabled && !localFileExists)
@@ -140,6 +166,12 @@ namespace 云端管理
 
         private void Close_Click(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
+        // 登录页底部“免责条款”超链接：随时可查看（非首次运行，仅查看）
+        private void Disclaimer_Click(object sender, RoutedEventArgs e)
+        {
+            new DisclaimerWindow(isFirstRun: false) { Owner = this }.ShowDialog();
+        }
+
         private async void Login_Click(object sender, RoutedEventArgs e)
         {
             await VerifyAndLogin();
@@ -154,6 +186,16 @@ namespace 云端管理
         {
             string masterPwd = GetMasterPassword();
             if (string.IsNullOrWhiteSpace(masterPwd)) return;
+
+            // 主密码至少 8 位（官方 / WebDAV / 本地 通用）
+            if (masterPwd.Length < 8)
+            {
+                MessageBox.Show("主密码长度至少为 8 位，请重新输入。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                StatusLabel.Text = "主密码至少 8 位:";
+                ClearMasterInputs();
+                LoginBtn.IsEnabled = true;
+                return;
+            }
 
             LoginBtn.IsEnabled = false;
             string originalStatus = StatusLabel.Text;
@@ -186,17 +228,28 @@ namespace 云端管理
                     return;
                 }
 
-                // ========== WebDAV 模式：先保存内嵌配置，再同步 ==========
+                // ========== WebDAV 模式：先校验配置完整，再同步 ==========
                 if (ModeWebDAV.IsChecked == true)
                 {
+                    string url = WebDavUrlInput.Text.Trim();
+                    string user = WebDavUserInput.Text.Trim();
+                    string pwd = WebDavPwdInput.Password;
+
+                    // WebDAV 模式必须填写完整配置，否则禁止登录使用
+                    if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(pwd))
+                    {
+                        MessageBox.Show("WebDAV 同步模式必须填写服务器地址、账号和授权码。\r\n如不需要云同步，请选择「本地使用」。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        StatusLabel.Text = "请填写完整的 WebDAV 配置:";
+                        LoginBtn.IsEnabled = true;
+                        return;
+                    }
+
                     var config = CloudSyncManager.GetConfig() ?? new CloudConfig();
                     config.Mode = SyncMode.WebDAV;
-                    config.Url = WebDavUrlInput.Text.Trim().EndsWith("/") ? WebDavUrlInput.Text.Trim() : WebDavUrlInput.Text.Trim() + "/";
-                    config.User = WebDavUserInput.Text.Trim();
-                    config.Password = WebDavPwdInput.Password;
-                    config.IsEnabled = !string.IsNullOrWhiteSpace(WebDavUrlInput.Text)
-                                      && !string.IsNullOrWhiteSpace(WebDavUserInput.Text)
-                                      && !string.IsNullOrWhiteSpace(WebDavPwdInput.Password);
+                    config.Url = url.EndsWith("/") ? url : url + "/";
+                    config.User = user;
+                    config.Password = pwd;
+                    config.IsEnabled = true;
                     CloudSyncManager.SaveConfig(config);
 
                     // 登录现有库前先同步一次
@@ -207,12 +260,12 @@ namespace 云端管理
                     }
                 }
 
-                // ========== 验证主密码（本地 / WebDAV 共用） ==========
+                // ========== 验证主密码（本地 / WebDAV 共用，使用对应模式的数据文件） ==========
                 if (File.Exists(_dataFile))
                 {
                     try
                     {
-                        ProfileManager.LoadProfiles(masterPwd);
+                        ProfileManager.LoadProfiles(masterPwd, _dataFile);
                     }
                     catch (Exception)
                     {
@@ -275,8 +328,8 @@ namespace 云端管理
                     return;
                 }
 
-                // 保存到本地（加密）
-                ProfileManager.SaveProfiles(profiles, masterPassword);
+                // 保存到本地（加密）—— 官方模式隔离文件
+                ProfileManager.SaveProfiles(profiles, masterPassword, _dataFile);
                 StatusLabel.Text = "同步完成，正在进入...";
                 OpenMainWindow(masterPassword);
             }
@@ -290,7 +343,12 @@ namespace 云端管理
 
         private void OpenMainWindow(string pwd)
         {
-            MainWindow mainWindow = new MainWindow(pwd);
+            // 本次登录选择的模式（决定主窗口状态栏显示与同步行为）
+            SyncMode mode = SyncMode.Local;
+            if (ModeOfficial.IsChecked == true) mode = SyncMode.Official;
+            else if (ModeWebDAV.IsChecked == true) mode = SyncMode.WebDAV;
+
+            MainWindow mainWindow = new MainWindow(pwd, _dataFile, mode);
             mainWindow.Show();
             this.Close();
         }

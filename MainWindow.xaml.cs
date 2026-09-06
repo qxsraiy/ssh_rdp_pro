@@ -12,12 +12,15 @@ namespace 云端管理
     {
         private List<SshProfile> _profiles = new List<SshProfile>();
         private string _masterPassword;
-        private string _dataFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "profiles.dat");
+        private string _dataFile;
+        private SyncMode _syncMode; // 本次登录选择的模式，决定状态栏显示与同步行为
 
-        public MainWindow(string password)
+        public MainWindow(string password, string dataFile, SyncMode syncMode)
         {
             InitializeComponent();
             _masterPassword = password;
+            _dataFile = dataFile;
+            _syncMode = syncMode;
             RefreshList();
             UpdateSyncStatus(true);
         }
@@ -34,7 +37,7 @@ namespace 云端管理
         {
             try
             {
-                _profiles = ProfileManager.LoadProfiles(_masterPassword);
+                _profiles = ProfileManager.LoadProfiles(_masterPassword, _dataFile);
                 ServerListBox.ItemsSource = null;
                 ServerListBox.ItemsSource = _profiles;
             }
@@ -60,7 +63,7 @@ namespace 云端管理
             // 1. 保存到本地
             try
             {
-                ProfileManager.SaveProfiles(_profiles, _masterPassword);
+                ProfileManager.SaveProfiles(_profiles, _masterPassword, _dataFile);
             }
             catch (Exception ex)
             {
@@ -69,9 +72,9 @@ namespace 云端管理
             }
             RefreshList();
 
-            // 2. 按同步模式同步到云端（保存按钮点击后立即执行）
+            // 2. 按本次登录选择的模式同步（保存按钮点击后立即执行）
             var config = CloudSyncManager.GetConfig();
-            if (config != null && config.Mode == SyncMode.Official && !string.IsNullOrEmpty(config.OfficialAccount))
+            if (_syncMode == SyncMode.Official && config != null && !string.IsNullOrEmpty(config.OfficialAccount))
             {
                 SetSyncStatus("正在同步到官方云端...");
                 try
@@ -110,7 +113,7 @@ namespace 云端管理
                     MessageBox.Show($"同步到官方云端失败（本地已保存，稍后会自动重试）:\n{ex.Message}", "同步失败", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
-            else if (config != null && config.Mode == SyncMode.WebDAV && config.IsEnabled)
+            else if (_syncMode == SyncMode.WebDAV && config != null && config.IsEnabled)
             {
                 SetSyncStatus("正在同步 WebDAV...");
                 try
@@ -124,7 +127,7 @@ namespace 云端管理
                     MessageBox.Show($"同步到 WebDAV 失败（本地已保存）:\n{ex.Message}", "同步失败", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
-            else if (config != null && config.Mode == SyncMode.Official)
+            else if (_syncMode == SyncMode.Official)
             {
                 SetSyncStatus("官方云端：未配置账号");
             }
@@ -136,17 +139,23 @@ namespace 云端管理
 
         private void UpdateSyncStatus(bool initial)
         {
-            var config = CloudSyncManager.GetConfig();
-            if (config == null) return;
-
-            if (config.Mode == SyncMode.Official && !string.IsNullOrEmpty(config.OfficialAccount))
-                SetSyncStatus($"官方云端账号: {config.OfficialAccount}");
-            else if (config.Mode == SyncMode.WebDAV && config.IsEnabled)
-                SetSyncStatus("WebDAV 同步已启用");
-            else if (config.Mode == SyncMode.Official)
-                SetSyncStatus("官方云端：未配置账号");
+            if (_syncMode == SyncMode.Official)
+            {
+                var config = CloudSyncManager.GetConfig();
+                if (config != null && !string.IsNullOrEmpty(config.OfficialAccount))
+                    SetSyncStatus($"官方云端账号: {config.OfficialAccount}");
+                else
+                    SetSyncStatus("官方云端：未配置账号");
+            }
+            else if (_syncMode == SyncMode.WebDAV)
+            {
+                var config = CloudSyncManager.GetConfig();
+                SetSyncStatus(config != null && config.IsEnabled ? "WebDAV 同步已启用" : "WebDAV 同步未配置");
+            }
             else
+            {
                 SetSyncStatus("本地模式（未启用云同步）");
+            }
         }
 
         private void Add_Click(object sender, RoutedEventArgs e)
