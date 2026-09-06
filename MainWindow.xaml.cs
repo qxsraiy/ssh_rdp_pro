@@ -11,6 +11,7 @@ namespace 云端管理
     public partial class MainWindow : Window
     {
         private List<SshProfile> _profiles = new List<SshProfile>();
+        private List<SshProfile> _allProfiles = new List<SshProfile>();
         private string _masterPassword;
         private string _dataFile;
         private SyncMode _syncMode; // 本次登录选择的模式，决定状态栏显示与同步行为
@@ -37,14 +38,49 @@ namespace 云端管理
         {
             try
             {
-                _profiles = ProfileManager.LoadProfiles(_masterPassword, _dataFile);
-                ServerListBox.ItemsSource = null;
-                ServerListBox.ItemsSource = _profiles;
+                _allProfiles = ProfileManager.LoadProfiles(_masterPassword, _dataFile);
+                ApplyFilter();
             }
             catch (Exception ex)
             {
                 if (!(ex is FileNotFoundException)) MessageBox.Show(ex.Message);
             }
+        }
+
+        // 搜索过滤 + 刷新列表 + 空状态提示
+        private void ApplyFilter()
+        {
+            string keyword = SearchBox?.Text?.Trim() ?? "";
+            if (string.IsNullOrEmpty(keyword))
+            {
+                _profiles = _allProfiles;
+            }
+            else
+            {
+                _profiles = _allProfiles.FindAll(p =>
+                    (p.Name?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Host?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Username?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Protocol?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+
+            ServerListBox.ItemsSource = null;
+            ServerListBox.ItemsSource = _profiles;
+
+            // 空状态提示
+            if (EmptyHint != null)
+            {
+                EmptyHint.Visibility = _allProfiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+        private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            if (SearchPlaceholder != null)
+            {
+                SearchPlaceholder.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+            }
+            ApplyFilter();
         }
 
         // 底部状态栏显示当前同步状态

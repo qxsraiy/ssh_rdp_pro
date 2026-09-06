@@ -13,6 +13,7 @@ namespace 云端管理
         public EditServerWindow(SshProfile profile = null)
         {
             InitializeComponent();
+            WindowTitle.Text = profile == null ? "新增服务器" : "编辑服务器";
             if (profile != null)
             {
                 NameInput.Text = profile.Name;
@@ -26,11 +27,16 @@ namespace 云端管理
                     RadioRDP.IsChecked = true;
                 }
 
-                if (profile.AuthType == "Key")
+                // 回填认证方式与凭据（关键：密码登录必须回填密码框，否则编辑保存后密码丢失）
+                if (profile.AuthType == "Key" && profile.Protocol != "RDP")
                 {
                     RadioKey.IsChecked = true;
                     _keyContent = profile.SecretData;
                     KeyPathDisplay.Text = "已加载已有密钥";
+                }
+                else
+                {
+                    PasswordInput.Password = profile.SecretData;
                 }
             }
 
@@ -105,13 +111,21 @@ namespace 云端管理
         {
             bool isRdp = RadioRDP.IsChecked == true;
 
+            // 必填校验：主机地址不能为空
+            if (string.IsNullOrWhiteSpace(HostInput.Text))
+            {
+                MessageBox.Show("请填写主机 IP 地址。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                HostInput.Focus();
+                return;
+            }
+
             ResultProfile = new SshProfile
             {
                 Protocol = isRdp ? "RDP" : "SSH",
                 Name = string.IsNullOrWhiteSpace(NameInput.Text) ? HostInput.Text : NameInput.Text,
-                Host = HostInput.Text,
-                Port = string.IsNullOrWhiteSpace(PortInput.Text) ? (isRdp ? "3389" : "22") : PortInput.Text,
-                Username = UserInput.Text,
+                Host = HostInput.Text.Trim(),
+                Port = string.IsNullOrWhiteSpace(PortInput.Text) ? (isRdp ? "3389" : "22") : PortInput.Text.Trim(),
+                Username = UserInput.Text.Trim(),
                 AuthType = (RadioKey.IsChecked == true && !isRdp) ? "Key" : "Password",
                 SecretData = (RadioKey.IsChecked == true && !isRdp) ? _keyContent : PasswordInput.Password
             };

@@ -21,6 +21,14 @@ namespace 云端管理
             return dir;
         }
 
+        // 免责条款是否已同意（独立标记，不随模式切换重复弹出）
+        private static string DisclaimerFlagPath => Path.Combine(GetDataDir(), "disclaimer_agreed.flag");
+        public static bool HasAgreedDisclaimer => File.Exists(DisclaimerFlagPath);
+        public static void MarkDisclaimerAgreed()
+        {
+            try { File.WriteAllText(DisclaimerFlagPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")); } catch { }
+        }
+
         public LoginWindow()
         {
             InitializeComponent();
@@ -113,11 +121,15 @@ namespace 云端管理
             var config = CloudSyncManager.GetConfig();
             bool localFileExists = File.Exists(_dataFile);
 
-            // 首次启动（无任何模式的数据文件）：强制显示免责条款，拒绝则退出程序
-            if (!localFileExists && new DisclaimerWindow { Owner = this }.ShowDialog() != true)
+            // 免责条款：仅首次（未同意过）强制显示，同意后标记文件不再弹；拒绝则退出
+            if (!HasAgreedDisclaimer)
             {
-                Application.Current.Shutdown();
-                return;
+                if (new DisclaimerWindow { Owner = this }.ShowDialog() != true)
+                {
+                    Application.Current.Shutdown();
+                    return;
+                }
+                MarkDisclaimerAgreed();
             }
 
             // WebDAV 模式：本地数据缺失但云同步配置存在 → 询问拉取
