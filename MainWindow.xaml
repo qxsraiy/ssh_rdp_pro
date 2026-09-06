@@ -86,6 +86,7 @@
                     <RowDefinition Height="50"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="75"/>
+                    <RowDefinition Height="22"/>
                 </Grid.RowDefinitions>
 
                 <TextBlock Text="设备工作台" FontSize="20" FontWeight="Bold" Foreground="#1A1A1A" VerticalAlignment="Center"/>
@@ -146,6 +147,9 @@
                         </ControlTemplate>
                     </Button.Template>
                 </Button>
+
+                <!-- 同步状态栏：保存后立即同步并在这里显示结果 -->
+                <TextBlock x:Name="SyncStatus" Grid.Row="3" Text="" FontSize="10" Foreground="#999" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Grid>
         </Grid>
     </Border>

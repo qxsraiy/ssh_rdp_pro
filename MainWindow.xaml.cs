@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 
@@ -18,6 +19,7 @@ namespace 云端管理
             InitializeComponent();
             _masterPassword = password;
             RefreshList();
+            UpdateSyncStatus(true);
         }
 
         private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -40,6 +42,111 @@ namespace 云端管理
             {
                 if (!(ex is FileNotFoundException)) MessageBox.Show(ex.Message);
             }
+        }
+
+        // 底部状态栏显示当前同步状态
+        private void SetSyncStatus(string text, bool isError = false)
+        {
+            if (SyncStatus == null) return;
+            SyncStatus.Text = text;
+            SyncStatus.Foreground = isError
+                ? System.Windows.Media.Brushes.Red
+                : System.Windows.Media.Brushes.Gray;
+        }
+
+        // 每次保存后调用：本地保存 + 官方云/WebDAV 同步（同步结果实时反馈）
+        private async void SaveAndRefresh()
+        {
+            // 1. 保存到本地
+            try
+            {
+                ProfileManager.SaveProfiles(_profiles, _masterPassword);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"本地保存失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            RefreshList();
+
+            // 2. 按同步模式同步到云端（保存按钮点击后立即执行）
+            var config = CloudSyncManager.GetConfig();
+            if (config != null && config.Mode == SyncMode.Official && !string.IsNullOrEmpty(config.OfficialAccount))
+            {
+                SetSyncStatus("正在同步到官方云端...");
+                try
+                {
+                    string token = OfficialCloudSyncManager.GetToken(config.OfficialAccount, _masterPassword);
+
+                    // 1. 拉取云端现有记录，拿到 item_key 集合（用于删除本地已移除的条目）
+                    var cloudRecords = await OfficialCloudSyncManager.PullAsync(token);
+                    var cloudKeys = new HashSet<string>();
+                    foreach (var r in cloudRecords) cloudKeys.Add(r.item_key);
+
+                    // 2. 逐条推送：一台服务器 = 一条数据库记录（item_key = 服务器ID）
+                    var localKeys = new HashSet<string>();
+                    foreach (var p in _profiles)
+                    {
+                        string singleJson = Newtonsoft.Json.JsonConvert.SerializeObject(p);
+                        string payload = CryptoHelper.Encrypt(singleJson, _masterPassword);
+                        await OfficialCloudSyncManager.PushAsync(token, p.Id, payload);
+                        localKeys.Add(p.Id);
+                    }
+
+                    // 3. 删除云端存在但本地已移除的条目（含旧版整包 "all"）
+                    foreach (var key in cloudKeys)
+                    {
+                        if (!localKeys.Contains(key))
+                        {
+                            await OfficialCloudSyncManager.DeleteAsync(token, key);
+                        }
+                    }
+
+                    SetSyncStatus($"已同步到官方云端 {_profiles.Count} 台设备  {DateTime.Now:HH:mm:ss}");
+                }
+                catch (Exception ex)
+                {
+                    SetSyncStatus("官方云端同步失败", true);
+                    MessageBox.Show($"同步到官方云端失败（本地已保存，稍后会自动重试）:\n{ex.Message}", "同步失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            else if (config != null && config.Mode == SyncMode.WebDAV && config.IsEnabled)
+            {
+                SetSyncStatus("正在同步 WebDAV...");
+                try
+                {
+                    await CloudSyncManager.UploadAndCleanAsync(_dataFile);
+                    SetSyncStatus($"已同步到 WebDAV  {DateTime.Now:HH:mm:ss}");
+                }
+                catch (Exception ex)
+                {
+                    SetSyncStatus("WebDAV 同步失败", true);
+                    MessageBox.Show($"同步到 WebDAV 失败（本地已保存）:\n{ex.Message}", "同步失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            else if (config != null && config.Mode == SyncMode.Official)
+            {
+                SetSyncStatus("官方云端：未配置账号");
+            }
+            else
+            {
+                SetSyncStatus("本地模式（未启用云同步）");
+            }
+        }
+
+        private void UpdateSyncStatus(bool initial)
+        {
+            var config = CloudSyncManager.GetConfig();
+            if (config == null) return;
+
+            if (config.Mode == SyncMode.Official && !string.IsNullOrEmpty(config.OfficialAccount))
+                SetSyncStatus($"官方云端账号: {config.OfficialAccount}");
+            else if (config.Mode == SyncMode.WebDAV && config.IsEnabled)
+                SetSyncStatus("WebDAV 同步已启用");
+            else if (config.Mode == SyncMode.Official)
+                SetSyncStatus("官方云端：未配置账号");
+            else
+                SetSyncStatus("本地模式（未启用云同步）");
         }
 
         private void Add_Click(object sender, RoutedEventArgs e)
@@ -80,16 +187,6 @@ namespace 云端管理
             }
         }
 
-        private async void SaveAndRefresh()
-        {
-            // 1. 保存到本地
-            ProfileManager.SaveProfiles(_profiles, _masterPassword);
-            RefreshList();
-
-            // 2. 异步上传到云端并清理旧版本
-            await CloudSyncManager.UploadAndCleanAsync(_dataFile);
-        }
-
         private void ServerListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (ServerListBox.SelectedItem != null) Connect_Click(null, null);
@@ -99,6 +196,52 @@ namespace 云端管理
         {
             if (ServerListBox.SelectedItem is SshProfile server)
             {
+                // ===== RDP 协议：走 mstsc（凭据用 cmdkey 临时写入，5秒后自动删除） =====
+                if (server.Protocol == "RDP")
+                {
+                    string target = (string.IsNullOrWhiteSpace(server.Port) || server.Port == "3389")
+                        ? server.Host
+                        : $"{server.Host}:{server.Port}";
+
+                    // 1. 写入 RDP 凭据到 Windows 凭据管理器
+                    if (!string.IsNullOrEmpty(server.SecretData))
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "cmdkey.exe",
+                            Arguments = $"/generic:TERMSRV/{target} /user:\"{server.Username}\" /pass:\"{server.SecretData}\"",
+                            CreateNoWindow = true,
+                            WindowStyle = ProcessWindowStyle.Hidden
+                        })?.WaitForExit();
+                    }
+
+                    // 2. 启动远程桌面连接
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "mstsc.exe",
+                        Arguments = "/v:" + target,
+                        UseShellExecute = true
+                    });
+
+                    // 3. 5秒后自动删除凭据，防止密码残留
+                    if (!string.IsNullOrEmpty(server.SecretData))
+                    {
+                        Task.Run(async () =>
+                        {
+                            await Task.Delay(5000);
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = "cmdkey.exe",
+                                Arguments = "/delete:TERMSRV/" + target,
+                                CreateNoWindow = true,
+                                WindowStyle = ProcessWindowStyle.Hidden
+                            });
+                        });
+                    }
+                    return;
+                }
+
+                // ===== SSH 协议：原逻辑 =====
                 string sshArgs = $"-p {server.Port} ";
                 string tempKeyPath = "";
                 string titleMsg = $"【{server.Name}】";

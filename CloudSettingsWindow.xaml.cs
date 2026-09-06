@@ -18,6 +18,7 @@ namespace 云端管理
             var config = CloudSyncManager.GetConfig();
             if (config != null)
             {
+                OfficialUrlInput.Text = config.OfficialServerUrl;
                 UrlInput.Text = config.Url;
                 UserInput.Text = config.User;
                 PwdInput.Password = config.Password;
@@ -34,21 +35,30 @@ namespace 云端管理
 
         private async void Save_Click(object sender, RoutedEventArgs e)
         {
+            // 官方云地址单独保存（登录窗口可自动填充）
+            var config = CloudSyncManager.GetConfig() ?? new CloudConfig();
+
+            if (!string.IsNullOrWhiteSpace(OfficialUrlInput.Text))
+            {
+                config.OfficialServerUrl = OfficialUrlInput.Text.Trim().TrimEnd('/');
+            }
+
+            // WebDAV 三项必须同时填写才启用
             if (string.IsNullOrWhiteSpace(UrlInput.Text) ||
                 string.IsNullOrWhiteSpace(UserInput.Text) ||
                 string.IsNullOrWhiteSpace(PwdInput.Password))
             {
-                MessageBox.Show("请填写完整的 WebDAV 信息。", "提示");
+                CloudSyncManager.SaveConfig(config);
+                MessageBox.Show("已保存官方云地址。WebDAV 信息不完整，未启用 WebDAV 同步。", "提示");
+                DialogResult = true;
                 return;
             }
 
-            var config = new CloudConfig
-            {
-                Url = UrlInput.Text.Trim().EndsWith("/") ? UrlInput.Text.Trim() : UrlInput.Text.Trim() + "/",
-                User = UserInput.Text.Trim(),
-                Password = PwdInput.Password,
-                IsEnabled = true
-            };
+            config.Mode = SyncMode.WebDAV;
+            config.Url = UrlInput.Text.Trim().EndsWith("/") ? UrlInput.Text.Trim() : UrlInput.Text.Trim() + "/";
+            config.User = UserInput.Text.Trim();
+            config.Password = PwdInput.Password;
+            config.IsEnabled = true;
 
             var originalContent = ((System.Windows.Controls.Button)sender).Content;
             ((System.Windows.Controls.Button)sender).Content = "验证中...";

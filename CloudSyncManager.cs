@@ -10,8 +10,24 @@ using WebDav;
 
 namespace 云端管理
 {
+    // 同步模式：本地使用 / WebDAV同步 / 官方云同步
+    public enum SyncMode
+    {
+        Local = 0,
+        WebDAV = 1,
+        Official = 2
+    }
+
     public class CloudConfig
     {
+        // ---- 通用 ----
+        public SyncMode Mode { get; set; } = SyncMode.Local;
+
+        // ---- 官方云（自建服务器）----
+        public string OfficialServerUrl { get; set; } = "";   // 如 https://你的域名/api
+        public string OfficialAccount { get; set; } = "";     // 云端账号（token 由主密码现场派生，不落盘）
+
+        // ---- WebDAV（保留原有字段）----
         public string Url { get; set; } = "";
         public string User { get; set; } = "";
         public string Password { get; set; } = "";
@@ -100,6 +116,15 @@ namespace 云端管理
             // 如果之前有明文的 json，顺手清理掉
             string oldJsonPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cloud_config.json");
             if (File.Exists(oldJsonPath)) File.Delete(oldJsonPath);
+        }
+
+        // 当前是否启用了官方云同步
+        public static bool IsOfficialEnabled()
+        {
+            var config = GetConfig();
+            return config.Mode == SyncMode.Official
+                && !string.IsNullOrEmpty(config.OfficialServerUrl)
+                && !string.IsNullOrEmpty(config.OfficialAccount);
         }
 
         private static WebDavClient CreateClient()

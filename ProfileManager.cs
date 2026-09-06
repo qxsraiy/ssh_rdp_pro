@@ -10,6 +10,10 @@ namespace 云端管理
     public class SshProfile
     {
         public string Id { get; set; } = Guid.NewGuid().ToString(); // 唯一ID
+
+        // 协议类型："SSH" 或 "RDP"（旧数据没有此字段时默认为 SSH）
+        public string Protocol { get; set; } = "SSH";
+
         public string Name { get; set; }
         public string Host { get; set; }
         public string Port { get; set; } = "22";
@@ -39,21 +43,15 @@ namespace 云端管理
             File.WriteAllText(DataFilePath, encryptedData);
         }
 
-        // 读取配置（读取文件并解密）
+        // 加载配置（读取并解密）
         public static List<SshProfile> LoadProfiles(string masterPassword)
         {
-            if (!File.Exists(DataFilePath)) return new List<SshProfile>();
+            if (!File.Exists(DataFilePath))
+                throw new FileNotFoundException("本地数据文件不存在");
 
-            try
-            {
-                string encryptedData = File.ReadAllText(DataFilePath);
-                string json = CryptoHelper.Decrypt(encryptedData, masterPassword);
-                return JsonConvert.DeserializeObject<List<SshProfile>>(json);
-            }
-            catch (CryptographicException)
-            {
-                throw new Exception("主密码错误或文件已损坏！");
-            }
+            string encryptedData = File.ReadAllText(DataFilePath);
+            string json = CryptoHelper.Decrypt(encryptedData, masterPassword);
+            return JsonConvert.DeserializeObject<List<SshProfile>>(json) ?? new List<SshProfile>();
         }
     }
 }
